@@ -1,1 +1,5 @@
-# aspen_cytotype_model
+# Author
+Benjamin Wong Blonder
+
+# Email
+benjamin.blonder@berkeley.edu
