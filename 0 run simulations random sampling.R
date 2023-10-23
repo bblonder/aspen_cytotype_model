@@ -2,11 +2,11 @@ source('simulation.R')
 library(parallel)
 
 # set up simulations
-DEBUG = FALSE
+DEBUG = TRUE
 
 if (DEBUG==TRUE)
 {
-  NUM_SAMPLES = 10
+  NUM_SAMPLES = 5
   NUM_CORES = 1  
 } else
 {
@@ -35,10 +35,10 @@ pick_n_less_than_sum_one <- function(n, max_scale_factor=1)
 
 sample_params <- function(num_samples,
                           dir_out,
-                          include_apomixis=TRUE,
+                          include_apomixis_parent_survival=TRUE,
                           include_haploid_tetraploid=TRUE,
                           include_full_range=TRUE,
-                          include_survival_variation=TRUE,
+                          include_offspring_survival_variation=TRUE,
                           include_triploid_fertility=TRUE)
 {
   prob_gametes_haploid = replicate(n=num_samples,pick_n_less_than_sum_one(n=2),simplify='matrix')
@@ -71,10 +71,10 @@ sample_params <- function(num_samples,
     prob_gametes_tetraploid_3 = prob_gametes_tetraploid[4,] * ifelse(include_haploid_tetraploid==TRUE, 1, 0) * ifelse(include_full_range==FALSE,0.1,1),
     prob_gametes_tetraploid_4 = prob_gametes_tetraploid[5,] * ifelse(include_haploid_tetraploid==TRUE, 1, 0) * ifelse(include_full_range==FALSE,0.1,1),
     
-    prob_apomixis_unreduced_gametes_haploid = runif(n=num_samples, min=0, max=1) * ifelse(include_apomixis==TRUE,1,0) * ifelse(include_haploid_tetraploid==TRUE, 1, 0) * ifelse(include_full_range==FALSE,0.1,1),
-    prob_apomixis_unreduced_gametes_diploid = runif(n=num_samples, min=0, max=1) * ifelse(include_apomixis==TRUE,1,0),
-    prob_apomixis_unreduced_gametes_triploid = runif(n=num_samples, min=0, max=1) * ifelse(include_apomixis==TRUE,1,0),
-    prob_apomixis_unreduced_gametes_tetraploid = runif(n=num_samples, min=0, max=1) * ifelse(include_apomixis==TRUE,1,0) * ifelse(include_haploid_tetraploid==TRUE, 1, 0) * ifelse(include_full_range==FALSE,0.1,1),
+    prob_apomixis_unreduced_gametes_haploid = runif(n=num_samples, min=0, max=1) * ifelse(include_apomixis_parent_survival==TRUE,1,0) * ifelse(include_haploid_tetraploid==TRUE, 1, 0) * ifelse(include_full_range==FALSE,0.1,1),
+    prob_apomixis_unreduced_gametes_diploid = runif(n=num_samples, min=0, max=1) * ifelse(include_apomixis_parent_survival==TRUE,1,0),
+    prob_apomixis_unreduced_gametes_triploid = runif(n=num_samples, min=0, max=1) * ifelse(include_apomixis_parent_survival==TRUE,1,0),
+    prob_apomixis_unreduced_gametes_tetraploid = runif(n=num_samples, min=0, max=1) * ifelse(include_apomixis_parent_survival==TRUE,1,0) * ifelse(include_haploid_tetraploid==TRUE, 1, 0) * ifelse(include_full_range==FALSE,0.1,1),
     
     n_indivs = round(runif(n=num_samples, min=10, max=1000),digits = 0),#sample(c(10,1000),size=num_samples,replace=TRUE),
     
@@ -88,7 +88,7 @@ sample_params <- function(num_samples,
     
     )
   
-  if(include_survival_variation==FALSE)
+  if(include_offspring_survival_variation==FALSE)
   {
     df_out$prob_survival_offspring_haploid=1
     df_out$prob_survival_offspring_diploid=1
@@ -145,9 +145,9 @@ params_simulations_all = sample_params(num_samples = NUM_SAMPLES,
 run_simulations(params_simulations_all)
 
 set.seed(2)
-params_simulations_no_apomixis = sample_params(num_samples = NUM_SAMPLES, include_apomixis = FALSE,
-                                       dir_out='outputs_no_apomixis')
-run_simulations(params_simulations_no_apomixis)
+params_simulations_no_apomixis_parent_survival = sample_params(num_samples = NUM_SAMPLES, include_apomixis_parent_survival = FALSE,
+                                       dir_out='outputs_no_apomixis_parent_survival')
+run_simulations(params_simulations_no_apomixis_parent_survival)
 
 set.seed(3)
 params_simulations_no_haploid_tetraploid = sample_params(num_samples = NUM_SAMPLES, include_haploid_tetraploid = FALSE,
@@ -155,7 +155,7 @@ params_simulations_no_haploid_tetraploid = sample_params(num_samples = NUM_SAMPL
 run_simulations(params_simulations_no_haploid_tetraploid)
 
 set.seed(4)
-params_simulations_no_offspring_survival_variation = sample_params(num_samples = NUM_SAMPLES, include_survival_variation = FALSE,
+params_simulations_no_offspring_survival_variation = sample_params(num_samples = NUM_SAMPLES, include_offspring_survival_variation = FALSE,
                                                     dir_out='outputs_no_offspring_survival_variation')
 run_simulations(params_simulations_no_offspring_survival_variation)
 
@@ -165,9 +165,9 @@ params_simulations_no_triploid_fertility = sample_params(num_samples = NUM_SAMPL
 run_simulations(params_simulations_no_triploid_fertility)
 
 set.seed(6)
-params_simulations_no_survival_variation_no_apomixis = sample_params(num_samples = NUM_SAMPLES, include_survival_variation = FALSE, include_apomixis = FALSE, 
-                                                         dir_out='outputs_no_survival_variation_no_apomixis')
-run_simulations(params_simulations_no_survival_variation_no_apomixis)
+params_simulations_no_offspring_survival_variation_no_apomixis_parent_survival = sample_params(num_samples = NUM_SAMPLES, include_offspring_survival_variation = FALSE, include_apomixis_parent_survival = FALSE, 
+                                                         dir_out='outputs_no_offspring_survival_variation_no_apomixis_parent_survival')
+run_simulations(params_simulations_no_offspring_survival_variation_no_apomixis_parent_survival)
 
 # set.seed(7)
 # params_simulations_no_full_range = sample_params(num_samples = NUM_SAMPLES, include_full_range = FALSE,
