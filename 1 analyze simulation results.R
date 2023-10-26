@@ -2,42 +2,56 @@ library(dplyr)
 library(ggplot2)
 library(tidyr)
 library(data.table)
-library(rgl)
 library(ggpubr)
 library(ranger)
 library(pdp)
+library(stringr)
 
 # add distance targets
 TARGET = c(0.0, 0.5, 0.5, 0)
 DELTA_TARGET = 0.05
 
+
+
 nice_names = c(
   dir_out='Scenario',
   in_target='In-target',
-  distance='Distance',
+  distance='Target distance (d)',
   n_indivs='M',
-  prob_apomixis_unreduced_gametes_diploid='B2',
-  prob_apomixis_unreduced_gametes_haploid='B1',
-  prob_apomixis_unreduced_gametes_tetraploid='B4',
-  prob_apomixis_unreduced_gametes_triploid='B3',
-  prob_gametes_diploid_0='A2,0',
-  prob_gametes_diploid_1='A2,1',
-  prob_gametes_diploid_2='A2,2',
-  prob_gametes_haploid_0='A1,0',
-  prob_gametes_haploid_1='A1,1',
-  prob_gametes_tetraploid_0='A4,0',
-  prob_gametes_tetraploid_1='A4,1',
-  prob_gametes_tetraploid_2='A4,2',
-  prob_gametes_tetraploid_3='A4,3',
-  prob_gametes_tetraploid_4='A4,4',
-  prob_gametes_triploid_0='A3,0',
-  prob_gametes_triploid_1='A3,1',
-  prob_gametes_triploid_2='A3,2',
-  prob_gametes_triploid_3='A3,3',
-  prob_survival_offspring_diploid='C2',
-  prob_survival_offspring_haploid='C1',
-  prob_survival_offspring_tetraploid='C4',
-  prob_survival_offspring_triploid='C3'
+
+  prob_apomixis_1='B1',
+  prob_apomixis_2='B2',
+  prob_apomixis_3='B3',
+  prob_apomixis_4='B4',
+
+  prob_gametes_1_0='A1,0',
+  prob_gametes_1_1='A1,1',
+  
+  prob_gametes_2_0='A2,0',
+  prob_gametes_2_1='A2,1',
+  prob_gametes_2_2='A2,2',
+  
+  prob_gametes_3_0='A3,0',
+  prob_gametes_3_1='A3,1',
+  prob_gametes_3_2='A3,2',
+  prob_gametes_3_3='A3,3',
+
+  prob_gametes_4_0='A4,0',
+  prob_gametes_4_1='A4,1',
+  prob_gametes_4_2='A4,2',
+  prob_gametes_4_3='A4,3',
+  prob_gametes_4_4='A4,4',
+
+  prob_survival_offspring_1='C1',
+  prob_survival_offspring_2='C2',
+  prob_survival_offspring_3='C3',
+  prob_survival_offspring_4='C4',
+  
+  prob_survival_parent_1='D1',
+  prob_survival_parent_2='D2',
+  prob_survival_parent_3='D3',
+  prob_survival_parent_4='D4'
+
   )
 
 
@@ -50,79 +64,162 @@ if (!file.exists(dir_results))
 }
 
 # load in files
-fn_all = file.path(dir(pattern='outputs*'),'outputs.csv')
-df_all = rbindlist(lapply(fn_all, read.csv)) %>%
-  mutate(dir_out=gsub("outputs_","",dir_out))
+fn_all = file.path(dir(pattern='output'),'outputs.csv')
+df_all = rbindlist(lapply(fn_all, read.csv))
+
+names_predictors = df_all %>% 
+  select(prob_survival_parent_1:prob_apomixis_4, n_indivs) %>% 
+  names
+
+# make nicer name
+rewrite_names <- function(name)
+{
+  names_shortened = sapply(strsplit(name,',')[[1]][-1], function(x) { 
+    ifelse(length(grep("=0",x)>0),NA,x)
+  })
+  names_final = paste(na.omit(names_shortened), collapse=", ")
+  names_final = gsub("_", " ", names_final)
+  names_final = gsub("=1", "", names_final)
+  #names_final = gsub("^$","gametes only", names_final)
+  
+  return(names_final)
+}
+
+rewritten_names = data.frame(dir_out=unique(df_all$dir_out),
+                             scenario=sapply(unique(df_all$dir_out), rewrite_names))
+rewritten_names$nvar = sapply(rewritten_names$dir_out, str_count, "=1")
+rewritten_names$scenario = factor(rewritten_names$scenario, levels=rewritten_names$scenario[order(rewritten_names$nvar)],ordered=TRUE)
+
+df_all = df_all %>% left_join(rewritten_names,by='dir_out')
 
 
 
-data_mean_n = df_all %>% 
-  select(contains("mean_n"))
-stopifnot(ncol(data_mean_n)==4)
+# add fractional data
+data_fractions_all = df_all %>% 
+  select(contains("counts_all_mean"))
+data_fractions_all = apply(data_fractions_all,1, function(x) x/sum(x)) %>% 
+  t %>% 
+  as.data.frame
+names(data_fractions_all) = paste("frac_all_mean",1:4,sep="_")
+# put in 0s for NaN cases
+data_fractions_all[is.na(data_fractions_all)] <- 0
+df_all = cbind(df_all, data_fractions_all)
 
-data_mean_n_target = matrix(nrow=nrow(data_mean_n),ncol=ncol(data_mean_n),data=TARGET,byrow=TRUE)
 
-df_all$distance = apply(data_mean_n - data_mean_n_target, 1, function(x) { sum(x^2)  })
+# add distance to target
+data_fractions_all_target = matrix(nrow=nrow(data_fractions_all),ncol=ncol(data_fractions_all),data=TARGET,byrow=TRUE)
+
+df_all$distance = apply(data_fractions_all - data_fractions_all_target, 1, function(x) { sum(x^2)  })
 df_all$in_target = df_all$distance < DELTA_TARGET
+# anything else that didn't work out doesn't count
+df_all$in_target[is.na(df_all$in_target)] = 0
+df_all$in_target = factor(df_all$in_target)
 
-df_counts = df_all %>% group_by(dir_out, in_target, .groups='keep') %>%
-  summarize(count=n())
 
-g_in_target = ggplot(df_counts,aes(x=dir_out,y=count,fill=in_target)) +
-  geom_bar(stat='identity') +
-  #facet_wrap(~dir_out) + 
-  theme_bw() +
+
+# make target graph
+# figure out number of parameters per scenario
+
+
+df_variances = df_all %>% 
+  select(scenario, all_of(names_predictors)) %>% 
+  group_by(scenario) %>% 
+  summarize_if(is.numeric, var)
+
+num_scenarios = df_all %>% 
+  group_by(scenario) %>% 
+  tally() %>%
+  ungroup %>%
+  pull(n) %>%
+  max
+
+num_vars = ((df_variances %>% 
+  select_if(is.numeric)) > 0) %>%
+  rowSums
+
+
+
+df_counts = df_all %>% group_by(scenario, in_target, .drop=FALSE) %>%
+  summarize(count=n()) %>%
+  left_join(data.frame(scenario=df_variances$scenario, num_vars=num_vars),by='scenario') %>%
+  filter(in_target==1) %>%
+  mutate(frac=count/num_scenarios) %>%
+  mutate(frac.per.var = frac^(1/num_vars))
+
+ordering_counts = df_counts %>% 
+  arrange(frac.per.var) %>% 
+  pull(scenario)
+
+df_counts = df_counts %>%
+  mutate(scenario=factor(scenario,levels=ordering_counts,ordered=TRUE))
+
+# g_in_target = ggplot(df_counts,aes(x=scenario,y=frac)) +
+#   geom_bar(stat='identity',position='dodge') +
+#   #facet_wrap(~dir_out) + 
+#   theme_bw() +
+#   coord_flip()# +
+#   #theme(legend.position='none')
+# ggsave(g_in_target, file=sprintf('%s/g_in_target.pdf',dir_results),width=8,height=6)
+# 
+
+g_in_target = df_counts %>%
+  select(scenario, frac, frac.per.var) %>%
+  pivot_longer(!scenario) %>%
+  mutate(name=factor(name,levels=c('frac','frac.per.var'),labels=c('No','Yes'))) %>%
+  ggplot(aes(x=scenario,y=value,fill=name)) +
+  geom_bar(stat='identity',position='dodge') +
   coord_flip() +
-  theme(legend.position='none')
-ggsave(g_in_target, file=sprintf('%s/g_in_target.pdf',dir_results),width=8,height=6)
-
+  scale_fill_manual(values=c('darkgoldenrod4','cornsilk3'),name='Normalized') +
+  ylab('Fraction of cases') +
+  xlab('Scenario') +
+  theme_bw() +
+  theme(legend.position='bottom')
+ggsave(g_in_target, file=sprintf('%s/g_in_target.pdf',dir_results),width=10,height=6)
+ggsave(g_in_target, file=sprintf('%s/g_in_target.png',dir_results),width=10,height=6)
 
 
 #show mean_n
 df_outcomes = df_all %>% 
-  select(contains("mean_n"), distance, dir_out) %>% 
-  group_by(dir_out) %>%
+  select(contains("frac_all_mean"), distance, scenario) %>% 
+  group_by(scenario) %>%
   sample_n(500) %>%
   mutate(row=1:n()) %>%
   ungroup %>%
-  pivot_longer(!c(distance,dir_out,row))
+  pivot_longer(!c(distance,scenario,row)) %>%
+  mutate(name=gsub("frac_all_mean_","",name))
 
 g_mean_n = ggplot(df_outcomes %>% mutate(name=gsub("mean_n_","",name)), aes(x=name,y=value,color=distance,group=row)) +
   geom_line(alpha=0.1) + 
   geom_jitter(width=0.1) +
   geom_point(alpha=0.1,size=0.25) +
   theme_bw() +
-  facet_wrap(~dir_out) +
+  facet_wrap(~scenario,ncol=4,labeller = labeller(scenario = label_wrap_gen(width = 60))) +
   scale_color_viridis_c(direction=-1,name='Distance (d)') +
   xlab("Cytotype") +
   ylab("Frequency")
-ggsave(g_mean_n, file=sprintf('%s/g_mean_n.pdf',dir_results),width=10,height=6)
-ggsave(g_mean_n, file=sprintf('%s/g_mean_n.png',dir_results),width=10,height=6)
+ggsave(g_mean_n, file=sprintf('%s/g_mean_n.pdf',dir_results),width=15,height=12)
+ggsave(g_mean_n, file=sprintf('%s/g_mean_n.png',dir_results),width=15,height=12)
 
 
 
 
 
  # make histogram
+num_cases = df_all %>% group_by(scenario) %>% tally() %>% summarize(max.n=max(n)) %>% pull(max.n)
+
 g_hist = ggplot(df_all, aes(x=distance)) +
-  facet_wrap(~dir_out,scales='free_y') +
+  facet_wrap(~scenario,scales='free_y',ncol=4,labeller = labeller(scenario = label_wrap_gen(width = 60))) +
   theme_bw() +
   geom_histogram(bins=100) +
   geom_vline(xintercept = DELTA_TARGET, color='red') +
   theme(legend.position='none') +
-  xlab('Distance from target (d)') + 
+  xlab('Target distance (d)') + 
   ylab('Number of cases') +
-  geom_text(data=df_counts %>% filter(in_target==FALSE) %>% mutate(frac=sprintf('%.2f%% in-target',100*(1-count/20000))),
+  geom_text(data=df_counts %>% filter(in_target==FALSE) %>% mutate(frac=sprintf('%.2f%% in-target',100*(1-count/num_cases))),
             aes(x=1,y=200,label=frac),color='blue')
-ggsave(g_hist, file=sprintf('%s/g_hist.pdf',dir_results),width=10,height=5)
-ggsave(g_hist, file=sprintf('%s/g_hist.png',dir_results),width=10,height=5)
+ggsave(g_hist, file=sprintf('%s/g_hist.pdf',dir_results),width=15,height=12)
+ggsave(g_hist, file=sprintf('%s/g_hist.png',dir_results),width=15,height=12)
 
-# ggplot(df_all, 
-#        aes(x=mean_n_2,y=mean_n_3,color=distance)) + 
-#   geom_point() + 
-#   facet_wrap(~dir_out) +
-#   scale_color_viridis_c() +
-#   theme_bw()
 
 
 
@@ -130,83 +227,63 @@ ggsave(g_hist, file=sprintf('%s/g_hist.png',dir_results),width=10,height=5)
 
 # look at 1-d histograms
 # look for independent inferences on predictors
-df_quantitative = df_all %>% 
-  select(mean_n_1:mean_n_4, 
-         distance,
-         in_target,
-         dir_out,
-         prob_survival_offspring_haploid:n_indivs)
+df_longer = df_all %>% 
+  select(distance, in_target, scenario, all_of(names_predictors)) %>% 
+  pivot_longer(!c(distance,scenario,in_target)) %>% 
+  mutate(nice_name=nice_names[name]) %>% 
+  mutate(in_target=factor(in_target))
 
-names_predictors = df_quantitative %>% 
-  select(prob_survival_offspring_haploid:prob_apomixis_unreduced_gametes_tetraploid, n_indivs) %>% 
-  names
-
-df_longer = df_quantitative %>% 
-  select(distance, in_target, dir_out, all_of(names_predictors)) %>% 
-  pivot_longer(!c(distance,dir_out,in_target))
-# 
-# g_density = ggplot(df_longer, aes(x=in_target,y=value,color=in_target,fill=in_target)) +
-#   facet_wrap(~dir_out+name,scales='free',nrow=length(unique(df_all$dir_out))) +
-#   geom_violin(draw_quantiles = c(0.5),alpha=0.5) +
-#   theme_bw() + 
-#   scale_color_manual(values=c('gray','blue')) + 
-#   scale_fill_manual(values=c('gray','blue')) 
-#   
-# ggsave(g_density, file=sprintf('%s/g_density.pdf',dir_results),width=70,height=25, limitsize=FALSE)
-
-
-g_density_new = ggplot(df_longer %>% mutate(nice_name=nice_names[name]), aes(color=in_target,fill=in_target,x=dir_out,y=value)) +
-  facet_wrap(~nice_name,scales='free',ncol=4) +
-  geom_violin(alpha=0.5,draw_quantiles = c(0.5)) +
+g_density_new = ggplot(df_longer, aes(x=scenario, y=value,color=in_target,fill=in_target)) +
+  facet_wrap(~name,scales='free',ncol=4, labeller=as_labeller(nice_names)) +
+  geom_violin(draw_quantiles=c(0.5),alpha=0.5) + 
   coord_flip() +
   theme_bw() +
   xlab('Scenario') + ylab('Value') +
-  scale_x_discrete(drop=FALSE,name='In-target') +
-  scale_color_manual(values=c('gray','blue')) + 
-  scale_fill_manual(values=c('gray','blue'))
-ggsave(g_density_new, file=sprintf('%s/g_density_new.pdf',dir_results),width=15,height=15)
-ggsave(g_density_new, file=sprintf('%s/g_density_new.png',dir_results),width=15,height=15)
+  scale_color_manual(values=c('gray','blue'),name='In-target') + 
+  scale_fill_manual(values=c('gray','blue'),name='In-target')
+
+ggsave(g_density_new, file=sprintf('%s/g_density_new.pdf',dir_results),width=30,height=40)
+ggsave(g_density_new, file=sprintf('%s/g_density_new.png',dir_results),width=30,height=40)
 
 
 
 # find cases to plot
-id_example_23 = df_all %>% 
-  filter(dir_out=='all') %>%
-  filter(distance<0.01) %>%
-  slice_head(n=1)
-print(id_example_23)
-
-id_example_4 = df_all %>% 
-  filter(dir_out=='all') %>%
-  filter(mean_n_4>0.7) %>%
-  slice_head(n=1)
-print(id_example_4)
+id_example = df_all %>% 
+  mutate(row_id=1:n()) %>%
+  filter(dir_out=="output,triploid_fertility=1,apomixis=1,haploid_tetraploid=1,offspring_survival_variation=1,parent_survival=1") %>%
+  filter(distance<0.02)
+print(id_example[19,] %>% select(id, row_id))
 
 plot_ts <- function(fn_ts)
 {
+  nice_names_time_series = c(all='Parents, P(t)',
+                             gametes='Gametes, G(t)',
+                             offspring_asexual='Offspring (asexual), Oasexual(t)',
+                             offspring_sexual='Offspring (sexual), Osexual(t)',
+                             offspring_survived='Offspring (survived), Os(t)',
+                             parent_survived='Parents (survived), Ps(t)')
+  
   df_ts = read.csv(fn_ts)
   
-  df_ts = apply(df_ts, 1, function(x) {x/sum(x)})
-  
   df_ts = df_ts %>% 
-    t %>%
     as.data.frame %>%
     mutate(time=1:n()) %>%
     pivot_longer(!time) %>%
-    mutate(name = gsub("ploidy_","",name))
-  
-  g = ggplot(df_ts, 
-             aes(x=time,y=value,color=name,group=name)) +
-    geom_line(linewidth=2,alpha=0.75) +
+    mutate(type=gsub("_[0-4]","",gsub("counts_","",name))) %>%
+    mutate(cytotype=gsub("[^0-9]*","",name))
+
+  g = ggplot(df_ts,
+                  aes(x=time,y=value,color=cytotype,group=name)) +
+    geom_line() +
     theme_bw() +
-    scale_color_manual(values=c('black','blue','red','orange'),name='Cytotype') +
     xlab('Time') +
-    ylab('Frequency') +
-    ylim(0,1)
+    ylab('Number') +
+    facet_wrap(~type,scales='free_y',labeller=as_labeller(nice_names_time_series)) +
+    scale_color_manual(values=c('black','blue','red','orange','gray'),drop=FALSE,name='Cytotype')
+  
   return(g)
 }
-g_ts_in_target_0 = plot_ts('outputs_all/ts_36.csv')
-g_ts_in_target_1 = plot_ts('outputs_all/ts_623.csv')
+g_ts_in_target = plot_ts('output,triploid_fertility=1,apomixis=1,haploid_tetraploid=1,offspring_survival_variation=1,parent_survival=1/ts_3738.csv')
 
 # plot parameters
 plot_matrix <- function(m, subtract_one=FALSE)
@@ -242,87 +319,58 @@ plot_matrix <- function(m, subtract_one=FALSE)
 plot_params <- function(row_id_this, df_this)
 {
   A_this = matrix(nrow=4,ncol=5,data=0)
-  A_this[1,1] = df_this$prob_gametes_haploid_0[row_id_this]
-  A_this[1,2] = df_this$prob_gametes_haploid_1[row_id_this]
-  A_this[2,1] = df_this$prob_gametes_diploid_0[row_id_this]
-  A_this[2,2] = df_this$prob_gametes_diploid_1[row_id_this]
-  A_this[2,3] = df_this$prob_gametes_diploid_2[row_id_this]
-  A_this[3,1] = df_this$prob_gametes_triploid_0[row_id_this]
-  A_this[3,2] = df_this$prob_gametes_triploid_1[row_id_this]
-  A_this[3,3] = df_this$prob_gametes_triploid_2[row_id_this]
-  A_this[3,4] = df_this$prob_gametes_triploid_3[row_id_this]
-  A_this[4,1] = df_this$prob_gametes_tetraploid_0[row_id_this]
-  A_this[4,2] = df_this$prob_gametes_tetraploid_1[row_id_this]
-  A_this[4,3] = df_this$prob_gametes_tetraploid_2[row_id_this]
-  A_this[4,4] = df_this$prob_gametes_tetraploid_3[row_id_this]
-  A_this[4,5] = df_this$prob_gametes_tetraploid_4[row_id_this]
+  A_this[1,1] = df_this$prob_gametes_1_0[row_id_this]
+  A_this[1,2] = df_this$prob_gametes_1_1[row_id_this]
+  A_this[2,1] = df_this$prob_gametes_2_0[row_id_this]
+  A_this[2,2] = df_this$prob_gametes_2_1[row_id_this]
+  A_this[2,3] = df_this$prob_gametes_2_2[row_id_this]
+  A_this[3,1] = df_this$prob_gametes_3_0[row_id_this]
+  A_this[3,2] = df_this$prob_gametes_3_1[row_id_this]
+  A_this[3,3] = df_this$prob_gametes_3_2[row_id_this]
+  A_this[3,4] = df_this$prob_gametes_3_3[row_id_this]
+  A_this[4,1] = df_this$prob_gametes_4_0[row_id_this]
+  A_this[4,2] = df_this$prob_gametes_4_1[row_id_this]
+  A_this[4,3] = df_this$prob_gametes_4_2[row_id_this]
+  A_this[4,4] = df_this$prob_gametes_4_3[row_id_this]
+  A_this[4,5] = df_this$prob_gametes_4_4[row_id_this]
 
   B_this = matrix(nrow=1,ncol=4,data=0)
-  B_this[1,1] = df_this$prob_apomixis_unreduced_gametes_haploid[row_id_this]
-  B_this[1,2] = df_this$prob_apomixis_unreduced_gametes_diploid[row_id_this]
-  B_this[1,3] = df_this$prob_apomixis_unreduced_gametes_triploid[row_id_this]
-  B_this[1,4] = df_this$prob_apomixis_unreduced_gametes_tetraploid[row_id_this]
+  B_this[1,1] = df_this$prob_apomixis_1[row_id_this]
+  B_this[1,2] = df_this$prob_apomixis_2[row_id_this]
+  B_this[1,3] = df_this$prob_apomixis_3[row_id_this]
+  B_this[1,4] = df_this$prob_apomixis_4[row_id_this]
   
   C_this = matrix(nrow=1,ncol=4,data=0)
-  C_this[1,1] = df_this$prob_survival_offspring_haploid[row_id_this]
-  C_this[1,2] = df_this$prob_survival_offspring_diploid[row_id_this]
-  C_this[1,3] = df_this$prob_survival_offspring_triploid[row_id_this]
-  C_this[1,4] = df_this$prob_survival_offspring_tetraploid[row_id_this]
+  C_this[1,1] = df_this$prob_survival_offspring_1[row_id_this]
+  C_this[1,2] = df_this$prob_survival_offspring_2[row_id_this]
+  C_this[1,3] = df_this$prob_survival_offspring_3[row_id_this]
+  C_this[1,4] = df_this$prob_survival_offspring_4[row_id_this]
+  
+  D_this = matrix(nrow=1,ncol=4,data=0)
+  D_this[1,1] = df_this$prob_survival_parent_1[row_id_this]
+  D_this[1,2] = df_this$prob_survival_parent_2[row_id_this]
+  D_this[1,3] = df_this$prob_survival_parent_3[row_id_this]
+  D_this[1,4] = df_this$prob_survival_parent_4[row_id_this]
   
   g_A_this = plot_matrix(A_this,subtract_one = TRUE) + ggtitle('Gamete probabilities (A)')
   g_B_this = plot_matrix(B_this) + ggtitle('Apomixis probabilities (B)')
-  g_C_this = plot_matrix(C_this) + ggtitle('Survival probabilities (C)')
+  g_C_this = plot_matrix(C_this) + ggtitle('Offspring survival probabilities (C)')
+  g_D_this = plot_matrix(D_this) + ggtitle('Parent survival probabilities (D)')
   
-  g_final = ggarrange(g_A_this, g_B_this, g_C_this,
-            nrow=3,
-            heights=c(2,1,1))
+  g_final = ggarrange(g_A_this, g_B_this, g_C_this, g_D_this,
+            nrow=4,
+            heights=c(2,1,1,1))
   
   return(g_final)
 }
 
-params_in_target_0 = plot_params(36,df_all)
-params_in_target_1 = plot_params(623,df_all)
+params_in_target = plot_params(158738,df_all)
 
-g_ts_example = ggarrange(params_in_target_1, g_ts_in_target_1,params_in_target_0, g_ts_in_target_0, 
-                         labels=c("(a)","","(b)",""),
-                         widths=c(2,3))
-ggsave(g_ts_example, file=sprintf('%s/g_ts_example.pdf',dir_results),width=10,height=10)
-ggsave(g_ts_example, file=sprintf('%s/g_ts_example.png',dir_results),width=10,height=10)
-
-# df_example_params = df_all %>% 
-#   mutate(row=1:n()) %>%
-#   group_by(dir_out) %>% 
-#   slice_head(n=1)
-# 
-# for (i in 1:nrow(df_example_params))
-# {
-#   ggsave(plot_params(i,df_example_params),file=sprintf('%s/g_params_row=%d_%s.pdf',dir_results, df_example_params$row[i], df_example_params$dir_out[i]),width=5,height=10)
-# }
-
-
-# 
-# 
-# # pca doesn't work very well
-# pca = prcomp(df_all %>% select(all_of(names_predictors)),center = TRUE, scale=TRUE)
-# df_pca = data.frame(in_target=df_quantitative$in_target, pca$x[,1:3], dir_out=df_all$dir_out)
-# 
-# g_pca_12 = ggplot(df_pca, aes(x=PC1, y=PC2,color=in_target)) +
-#   geom_point(size=0.2,alpha=0.1) +
-#   theme_bw() +
-#   scale_color_manual(values=c('gray','blue')) +
-#   facet_wrap(~dir_out,nrow=1)
-# 
-# g_pca_23 = ggplot(df_pca, aes(x=PC2, y=PC3,color=in_target)) +
-#   geom_point(size=0.2,alpha=0.1) +
-#   theme_bw() +
-#   scale_color_manual(values=c('gray','blue')) +
-#   facet_wrap(~dir_out,nrow=1)
-# 
-# ggsave(ggarrange(g_pca_12, g_pca_23,align='hv',nrow=2, common.legend = TRUE,legend='bottom'),file=sprintf('%s/g_pca.pdf',dir_results),width=14,height=8)
-# 
-# #plot3d(data_pca$PC1, data_pca$PC2, data_pca$PC3,col=rainbow(15)[cut(data_pca$distance,breaks=10)])
-# 
-# #biplot(pca)
+g_ts_example = ggarrange(params_in_target, g_ts_in_target,
+                         labels=c("(a)","(b)"),
+                         widths=c(2,6))
+ggsave(g_ts_example, file=sprintf('%s/g_ts_example.pdf',dir_results),width=13,height=10)
+ggsave(g_ts_example, file=sprintf('%s/g_ts_example.png',dir_results),width=13,height=10)
 
 
 
@@ -331,8 +379,8 @@ ggsave(g_ts_example, file=sprintf('%s/g_ts_example.png',dir_results),width=10,he
 
 # rename and split data
 df_all_split = df_all %>% 
-  group_by(dir_out) %>%
-  select(dir_out, in_target, distance, all_of(names_predictors))
+  group_by(scenario) %>%
+  select(scenario, in_target, distance, all_of(names_predictors))
 # split into pieces
 df_all_split = df_all_split %>% 
   group_split()
@@ -342,6 +390,7 @@ rf_list = lapply(X=df_all_split, FUN=function(df_this) {
   cat('.')
   
   freqs = table(df_this$in_target)
+  print(freqs)
   
   m_rf = ranger(formula(sprintf("distance ~ %s",paste(names_predictors,collapse=" + "))), 
                 data=df_this,
@@ -351,396 +400,281 @@ rf_list = lapply(X=df_all_split, FUN=function(df_this) {
                 #classification=TRUE,
                 importance='impurity',
                 #case.weights=1/df_this$distance
-                case.weights=ifelse(df_this$in_target==1,freqs["FALSE"]/freqs["TRUE"],1)
+                case.weights=ifelse(df_this$in_target=="1",freqs["1"]/freqs["0"],1)
                 )
   return(m_rf)
 })
-names(rf_list) = sapply(df_all_split, function(x) { x$dir_out[1] })
+names(rf_list) = sapply(df_all_split, function(x) { x$scenario[1] })
 
 # post-hoc explanation of relationship among variables
-df_importance = cbind(dir_out=unique(df_all$dir_out), do.call("rbind",lapply(rf_list, function(x) { data.frame(t(importance(x))) }))) %>%
-  pivot_longer(!dir_out) %>%
-  group_by(dir_out) %>%
+df_importance = cbind(scenario=unique(df_all$scenario), do.call("rbind",lapply(rf_list, function(x) { data.frame(t(importance(x))) }))) %>%
+  pivot_longer(!scenario) %>%
+  group_by(scenario) %>%
   mutate(value_relative = value/max(value,na.rm=T)) %>%
   mutate(nice_name = nice_names[name])
 
 g_rf_importance = ggplot(df_importance, aes(x=nice_name,y=value,fill=value_relative)) +
   geom_bar(stat='identity') +
-  facet_wrap(~dir_out,scales='free',ncol=2) +
+  facet_wrap(~scenario,scales='free',ncol=4,labeller = labeller(scenario = label_wrap_gen(width = 60))) +
   theme_bw() +
   coord_flip() +
   scale_fill_viridis_c(direction=-1) + 
   scale_x_discrete(limits = rev(sort(unique(df_importance$nice_name)))) +
-  xlab('Importance (Gini impurity)') +
-  ylab('Parameter') +
+  ylab('Importance (Gini impurity)') +
+  xlab('Parameter') +
   theme(legend.position='none')
-ggsave(g_rf_importance, file=sprintf('%s/g_rf_importance.pdf',dir_results),width=8,height=12)
-ggsave(g_rf_importance, file=sprintf('%s/g_rf_importance.png',dir_results),width=8,height=12)
+ggsave(g_rf_importance, file=sprintf('%s/g_rf_importance.pdf',dir_results),width=15,height=25)
+ggsave(g_rf_importance, file=sprintf('%s/g_rf_importance.png',dir_results),width=15,height=25)
+
+
+g_rf_importance_all = ggplot(df_importance %>%
+                               filter(scenario=="triploid fertility, apomixis, haploid tetraploid, offspring survival variation, parent survival"), 
+                             aes(x=nice_name,y=value,fill=value_relative)) +
+  geom_bar(stat='identity') +
+  theme_bw() +
+  coord_flip() +
+  scale_fill_viridis_c(direction=-1) + 
+  scale_x_discrete(limits = rev(sort(unique(df_importance$nice_name)))) +
+  ylab('Importance (Gini impurity)') +
+  xlab('Parameter') +
+  theme(legend.position='none')
+ggsave(g_rf_importance_all, file=sprintf('%s/g_rf_importance_all.pdf',dir_results),width=7,height=7)
+ggsave(g_rf_importance_all, file=sprintf('%s/g_rf_importance_all.png',dir_results),width=7,height=7)
 
 
 
+# get r2 values
+rf_r2 = sapply(rf_list, function(x) {x$r.squared}) %>%
+  as.data.frame
+rf_r2$scenario = factor(row.names(rf_r2),levels=levels(ordering_counts),ordered=TRUE)
+names(rf_r2)[1] = "r.squared"
+
+g_rf_r2 = ggplot(rf_r2, aes(x=scenario,y=r.squared)) +
+  geom_bar(stat='identity') +
+  coord_flip() +
+  theme_bw() +
+  xlab('Scenario') +
+  ylab('Random forest R2')
+ggsave(g_rf_r2, file=sprintf('%s/g_rf_r2.pdf',dir_results),width=9,height=7)
+ggsave(g_rf_r2, file=sprintf('%s/g_rf_r2.png',dir_results),width=9,height=7)
 
 # plot params
 
+make_dot_plot <- function(scenario_this="triploid fertility, apomixis, haploid tetraploid, offspring survival variation, parent survival",
+                          xvar,
+                          yvar,
+                          include_log_limits=TRUE,
+                          include_lines=TRUE,
+                          include_title=TRUE,
+                          xlab_this,
+                          ylab_this)
+{
+  df_this = df_all %>%
+    mutate(fecundity_3 = prob_gametes_3_1 + prob_gametes_3_2 + prob_gametes_3_3) %>%
+    mutate(fecundity_2 = prob_gametes_2_1 + prob_gametes_2_2) %>%
+    filter(scenario==scenario_this)
+  
+  g = ggplot(df_this, aes_string(x=xvar,y=yvar,color="distance")) +
+    geom_point(alpha=0.5,aes(size=ifelse(distance<0.05,1.5,0.5))) +
+    theme_bw() +
+    scale_color_gradientn(colors=c('purple','red','orange','yellow','gray'),values=c(0,0.025,0.1,0.5,1),name='Distance (d)',limits=c(0,1.75)) +
+    scale_size(name='In-target',guide='none',range=c(0.5,3)) +
+    xlab(xlab_this) + 
+    ylab(ylab_this)
+  
+  if (include_title==TRUE)
+  {
+    g = g + ggtitle(str_wrap(scenario_this, 70))
+  }
+  
+  if (include_log_limits==TRUE)
+  {
+    g = g + 
+      scale_x_log10(limits=c(1e-2,1e2)) +
+      scale_y_log10(limits=c(1e-2,1e2))
+  }
+  if (include_lines==TRUE)
+  {
+    g = g + 
+      geom_hline(yintercept = 1) +
+      geom_vline(xintercept = 1)
+  }
+  
+  return(g)
+}
+
+
+
 # all
-g_scenario_all_1 = df_all %>%
-  filter(dir_out=='all') %>%
-  ggplot(aes(x=prob_survival_offspring_triploid/prob_survival_offspring_diploid,y=prob_apomixis_unreduced_gametes_triploid/prob_apomixis_unreduced_gametes_diploid,color=distance)) +
-  geom_point(size=0.3,alpha=0.5) +
-  theme_bw() +
-  scale_x_log10(limits=c(1e-2,1e2)) +
-  scale_y_log10(limits=c(1e-2,1e2)) +
-  scale_color_gradientn(colors=c('purple','red','orange','yellow','gray'),values=c(0,0.05,0.1,0.5,1),name='Distance (d)') +
-  geom_hline(yintercept = 1) +
-  geom_vline(xintercept = 1) +
-  xlab("C3/C2") + ylab("B3/B2")
+g_dots_all_1 = make_dot_plot(scenario_this="triploid fertility, apomixis, haploid tetraploid, offspring survival variation, parent survival",
+                                include_title = TRUE,
+                                xvar="prob_survival_parent_3/prob_survival_parent_2",
+                                yvar="prob_survival_offspring_3/prob_survival_offspring_2",
+                                xlab_this="D3/D2",
+                                ylab_this="C3/C2")
 
-g_scenario_all_2 = df_all %>%
-  filter(dir_out=='all') %>%
-  ggplot(aes(x=prob_gametes_diploid_2,y=prob_gametes_diploid_1,color=distance)) +
-  geom_point(size=0.3,alpha=0.5) +
-  theme_bw() +
-  xlim(0,1) + ylim(0,1) +
-  scale_color_gradientn(colors=c('purple','red','orange','yellow','gray'),values=c(0,0.05,0.1,0.5,1),name='Distance (d)') +
-  geom_hline(yintercept = 1) +
-  geom_vline(xintercept = 1) +
-  xlab("A2,2") + ylab("A2,1")
+g_dots_all_2 = make_dot_plot(scenario_this="triploid fertility, apomixis, haploid tetraploid, offspring survival variation, parent survival",
+                                include_title = FALSE,
+                                 xvar="fecundity_3/fecundity_2",
+                                 yvar="prob_survival_offspring_3/prob_survival_offspring_2",
+                                 xlab_this="Relative triploid fecundity, (A31 + A32 + A33)/(A21+A22)",
+                                 ylab_this="C3/C2")
 
-ggsave(ggarrange(g_scenario_all_1, g_scenario_all_2, 
+g_dots_realistic_1 = make_dot_plot(scenario_this="triploid fertility, offspring survival variation, parent survival",
+                                   include_title = TRUE,
+                             xvar="prob_survival_parent_3/prob_survival_parent_2",
+                             yvar="prob_survival_offspring_3/prob_survival_offspring_2",
+                             xlab_this="D3/D2",
+                             ylab_this="C3/C2")
+
+g_dots_realistic_2 = make_dot_plot(scenario_this="triploid fertility, offspring survival variation, parent survival",
+                                   include_title = FALSE,
+                             xvar="fecundity_3/fecundity_2",
+                             yvar="prob_survival_offspring_3/prob_survival_offspring_2",
+                             xlab_this="Relative triploid fecundity, (A31 + A32 + A33)/(A21+A22)",
+                             ylab_this="C3/C2")
+
+ggsave(ggarrange(g_dots_all_1, g_dots_all_2, 
+                 g_dots_realistic_1, g_dots_realistic_2, 
                  align='hv',
                  common.legend = TRUE,
                  labels='auto',
                  legend='bottom'),
-       file=sprintf('%s/g_scenario_all.pdf',dir_results), 
-       width=12,height=7) 
-ggsave(ggarrange(g_scenario_all_1, g_scenario_all_2, 
+       file=sprintf('%s/g_dots_all.pdf',dir_results), 
+       width=12,height=13) 
+ggsave(ggarrange(g_dots_all_1, g_dots_all_2, 
+                 g_dots_realistic_1, g_dots_realistic_2, 
                  align='hv',
                  common.legend = TRUE,
                  labels='auto',
                  legend='bottom'),
-       file=sprintf('%s/g_scenario_all.png',dir_results), 
-       width=12,height=7) 
+       file=sprintf('%s/g_dots_all.png',dir_results), 
+       width=12,height=13) 
 
 
-# no apomixis
-g_scenario_no_apomixis_1 = df_all %>%
-  filter(dir_out=='no_apomixis') %>%
-  ggplot(aes(x=prob_survival_offspring_triploid/prob_survival_offspring_diploid,y=prob_survival_offspring_tetraploid/prob_survival_offspring_diploid,color=distance)) +
-  geom_point(size=0.3) +
-  theme_bw() +
-  scale_x_log10(limits=c(1e-2,1e2)) +
-  scale_y_log10(limits=c(1e-2,1e2)) +
-  scale_color_gradientn(colors=c('purple','red','orange','yellow','gray'),values=c(0,0.05,0.1,0.5,1),name='Distance (d)') +
-  geom_hline(yintercept = 1) +
-  geom_vline(xintercept = 1) +
-  xlab("C3/C2") + ylab("C4/C1")
 
-g_scenario_no_apomixis_2 = df_all %>%
-  filter(dir_out=='no_apomixis') %>%
-  ggplot(aes(x=prob_gametes_diploid_1,y=prob_gametes_diploid_2,color=distance)) +
-  geom_point(size=0.3,alpha=0.5) +
-  theme_bw() +
-  scale_x_log10() +
-  scale_y_log10() +
-  scale_color_gradientn(colors=c('purple','red','orange','yellow','gray'),values=c(0,0.05,0.1,0.5,1),name='Distance (d)') +
-  geom_hline(yintercept = 1) +
-  geom_vline(xintercept = 1) +
-  xlab("A2,2") + ylab("A2,1")
+g_dots_base_1 = make_dot_plot(scenario_this="",
+                              include_title = TRUE,
+                                   xvar="prob_gametes_2_2",
+                                   yvar="prob_gametes_2_1",
+                                   include_log_limits = FALSE,
+                                   xlab_this="A22",
+                                   ylab_this="A21")
 
-ggsave(ggarrange(g_scenario_no_apomixis_1, g_scenario_no_apomixis_2, 
+g_dots_base_2 = make_dot_plot(scenario_this="triploid fertility",
+                              include_title = TRUE,
+                              xvar="fecundity_3",
+                              yvar="fecundity_2",
+                              include_log_limits = FALSE,
+                              xlab_this="Triploid fecundity, (A31 + A32 + A33)",
+                              ylab_this="Diploid fecundity, (A21 + A22)")
+
+g_dots_base_3 = make_dot_plot(scenario_this="parent survival",
+                              include_title = TRUE,
+                              xvar="prob_survival_parent_3",
+                              yvar="prob_gametes_2_1",
+                              include_log_limits = FALSE,
+                              xlab_this="D3",
+                              ylab_this="A21")
+
+g_dots_base_4 = make_dot_plot(scenario_this="haploid tetraploid",
+                              include_title = TRUE,
+                              xvar="prob_gametes_4_2",
+                              yvar="prob_gametes_2_2",
+                              include_log_limits = FALSE,
+                              xlab_this="A42",
+                              ylab_this="A22")
+
+ggsave(ggarrange(g_dots_base_1, g_dots_base_2, g_dots_base_3, g_dots_base_4,
+          align='hv',
+          common.legend = TRUE,
+          labels='auto',
+          legend='bottom'),      
+file=sprintf('%s/g_dots_base.pdf',dir_results), 
+width=12,height=13) 
+ggsave(ggarrange(g_dots_base_1, g_dots_base_2, g_dots_base_3, g_dots_base_4,
                  align='hv',
                  common.legend = TRUE,
                  labels='auto',
-                 legend='bottom'),
-       file=sprintf('%s/g_scenario_no_apomixis.pdf',dir_results), 
-       width=12,height=7) 
-ggsave(ggarrange(g_scenario_no_apomixis_1, g_scenario_no_apomixis_2, 
-                 align='hv',
-                 common.legend = TRUE,
-                 labels='auto',
-                 legend='bottom'),
-       file=sprintf('%s/g_scenario_no_apomixis.png',dir_results), 
-       width=12,height=7) 
-
-# no haploid or tetraploid
-g_scenario_no_haploid_tetraploid_1 = df_all %>%
-  filter(dir_out=='no_haploid_tetraploid') %>%
-  ggplot(aes(x=prob_survival_offspring_triploid/prob_survival_offspring_diploid,y=prob_apomixis_unreduced_gametes_triploid/prob_apomixis_unreduced_gametes_diploid,color=distance)) +
-  geom_point(size=0.3) +
-  theme_bw() +
-  scale_x_log10(limits=c(1e-2,1e2)) +
-  scale_y_log10(limits=c(1e-2,1e2)) +
-  scale_color_gradientn(colors=c('purple','red','orange','yellow','gray'),values=c(0,0.05,0.1,0.5,1)) +
-  geom_hline(yintercept = 1) +
-  geom_vline(xintercept = 1) +
-  xlab("C3/C2") + ylab("B3/B2")
-
-g_scenario_no_haploid_tetraploid_2 = df_all %>%
-  filter(dir_out=='no_haploid_tetraploid') %>%
-  ggplot(aes(x=prob_gametes_diploid_2,y=prob_gametes_diploid_1,color=distance)) +
-  geom_point(size=0.3) +
-  theme_bw() +
-  scale_x_log10() +
-  scale_y_log10() +
-  scale_color_gradientn(colors=c('purple','red','orange','yellow','gray'),values=c(0,0.05,0.1,0.5,1)) +
-  geom_hline(yintercept = 1) +
-  geom_vline(xintercept = 1) +
-  xlab("A2,2") + ylab("A2,1")
-
-ggsave(ggarrange(g_scenario_no_haploid_tetraploid_1, g_scenario_no_haploid_tetraploid_2, 
-                 align='hv',
-                 common.legend = TRUE,
-                 labels = 'auto',
-                 legend='bottom'),
-       file=sprintf('%s/g_scenario_no_haploid_tetraploid.pdf',dir_results), 
-       width=12,height=7) 
-ggsave(ggarrange(g_scenario_no_haploid_tetraploid_1, g_scenario_no_haploid_tetraploid_2, 
-                 align='hv',
-                 common.legend = TRUE,
-                 labels = 'auto',
-                 legend='bottom'),
-       file=sprintf('%s/g_scenario_no_haploid_tetraploid.png',dir_results), 
-       width=12,height=7) 
-
-# no survival variation
-g_scenario_no_survival_variation_1 = df_all %>%
-  filter(dir_out=='no_survival_variation') %>%
-  ggplot(aes(x=prob_apomixis_unreduced_gametes_triploid/prob_apomixis_unreduced_gametes_diploid,y=prob_apomixis_unreduced_gametes_tetraploid/prob_apomixis_unreduced_gametes_haploid,color=distance)) +
-  geom_point(size=0.3) +
-  theme_bw() +
-  scale_x_log10(limits=c(1e-2,1e2)) +
-  scale_y_log10(limits=c(1e-2,1e2)) +
-  scale_color_gradientn(colors=c('purple','red','orange','yellow','gray'),values=c(0,0.05,0.1,0.5,1)) +
-  geom_hline(yintercept = 1) +
-  geom_vline(xintercept = 1) +
-  xlab("B3/B2") + ylab("B4/B1")
-
-g_scenario_no_survival_variation_2 = df_all %>%
-  filter(dir_out=='no_survival_variation') %>%
-  ggplot(aes(x=prob_gametes_diploid_2,y=prob_gametes_diploid_1,color=distance)) +
-  geom_point(size=0.3) +
-  theme_bw() +
-  scale_x_log10() +
-  scale_y_log10() +
-  scale_color_gradientn(colors=c('purple','red','orange','yellow','gray'),values=c(0,0.05,0.1,0.5,1)) +
-  geom_hline(yintercept = 1) +
-  geom_vline(xintercept = 1) +
-  xlab("A2,2") + ylab("A2,1")
-
-ggsave(ggarrange(g_scenario_no_survival_variation_1, g_scenario_no_survival_variation_2, 
-                 align='hv',
-                 common.legend = TRUE,
-                 legend='bottom'),
-       file=sprintf('%s/g_scenario_no_survival_variation.pdf',dir_results), 
-       width=12,height=7) 
-ggsave(ggarrange(g_scenario_no_survival_variation_1, g_scenario_no_survival_variation_2, 
-                 align='hv',
-                 common.legend = TRUE,
-                 legend='bottom'),
-       file=sprintf('%s/g_scenario_no_survival_variation.png',dir_results), 
-       width=12,height=7) 
-
-# no triploid fertility
-g_scenario_no_triploid_fertility_1 = df_all %>%
-  filter(dir_out=='no_triploid_fertility') %>%
-  ggplot(aes(x=prob_survival_offspring_triploid/prob_survival_offspring_diploid,y=prob_apomixis_unreduced_gametes_triploid/prob_apomixis_unreduced_gametes_diploid,color=distance)) +
-  geom_point(size=0.3,alpha=0.5) +
-  theme_bw() +
-  scale_x_log10(limits=c(1e-2,1e2)) +
-  scale_y_log10(limits=c(1e-2,1e2)) +
-  scale_color_gradientn(colors=c('purple','red','orange','yellow','gray'),values=c(0,0.05,0.1,0.5,1),name='Distance (d)') +
-  geom_hline(yintercept = 1) +
-  geom_vline(xintercept = 1) +
-  xlab("C3/C2") + ylab("B3/B2")
-
-g_scenario_no_triploid_fertility_2 = df_all %>%
-  filter(dir_out=='no_triploid_fertility') %>%
-  ggplot(aes(x=prob_gametes_diploid_2,y=prob_gametes_diploid_1,color=distance)) +
-  geom_point(size=0.3) +
-  theme_bw() +
-  scale_x_log10() +
-  scale_y_log10() +
-  scale_color_gradientn(colors=c('purple','red','orange','yellow','gray'),values=c(0,0.05,0.1,0.5,1)) +
-  geom_hline(yintercept = 1) +
-  geom_vline(xintercept = 1) +
-  xlab("A2,2") + ylab("A2,1")
-
-ggsave(ggarrange(g_scenario_no_triploid_fertility_1, g_scenario_no_triploid_fertility_2, 
-                 align='hv',
-                 common.legend = TRUE,
-                 labels='auto',
-                 legend='bottom'),
-       file=sprintf('%s/g_scenario_no_triploid_fertility.pdf',dir_results), 
-       width=12,height=7) 
-ggsave(ggarrange(g_scenario_no_triploid_fertility_1, g_scenario_no_triploid_fertility_2, 
-                 align='hv',
-                 common.legend = TRUE,
-                 labels='auto',
-                 legend='bottom'),
-       file=sprintf('%s/g_scenario_no_triploid_fertility.png',dir_results), 
-       width=12,height=7) 
-
-
-
-# no survival variation no apomixis (just gametes
-g_scenario_no_survival_variation_no_apomixis_1 = df_all %>%
-  filter(dir_out=='no_survival_variation_no_apomixis') %>%
-  ggplot(aes(x=prob_gametes_diploid_2/prob_gametes_diploid_1,y=prob_gametes_tetraploid_4/prob_gametes_tetraploid_2,color=distance)) +
-  geom_point(size=0.3) +
-  theme_bw() +
-  scale_x_log10(limits=c(1e-2,1e2)) +
-  scale_y_log10(limits=c(1e-2,1e2)) +
-  scale_color_gradientn(colors=c('purple','red','orange','yellow','gray'),values=c(0,0.05,0.1,0.5,1)) +
-  geom_hline(yintercept = 1) +
-  geom_vline(xintercept = 1) +
-  xlab("A2,2/A2,1") + ylab("A4,4/A4,2")
-
-g_scenario_no_survival_variation_no_apomixis_2 = df_all %>%
-  filter(dir_out=='no_survival_variation_no_apomixis') %>%
-  ggplot(aes(x=prob_gametes_triploid_3/prob_gametes_diploid_1,y=prob_gametes_triploid_1/prob_gametes_diploid_1,color=distance)) +
-  geom_point(size=0.3) +
-  theme_bw() +
-  scale_x_log10(limits=c(1e-2,1e2)) +
-  scale_y_log10(limits=c(1e-2,1e2)) +
-  scale_color_gradientn(colors=c('purple','red','orange','yellow','gray'),values=c(0,0.05,0.1,0.5,1)) +
-  geom_hline(yintercept = 1) +
-  geom_vline(xintercept = 1) +
-  xlab("A3,3/A2,1") + ylab("A3,1/A2,1")
-
-ggsave(ggarrange(g_scenario_no_survival_variation_no_apomixis_1, g_scenario_no_survival_variation_no_apomixis_2, 
-                 align='hv',
-                 common.legend = TRUE,
-                 legend='bottom'),
-       file=sprintf('%s/g_scenario_no_survival_variation_no_apomixis.pdf',dir_results), 
-       width=12,height=7) 
-ggsave(ggarrange(g_scenario_no_survival_variation_no_apomixis_1, g_scenario_no_survival_variation_no_apomixis_2, 
-                 align='hv',
-                 common.legend = TRUE,
-                 legend='bottom'),
-       file=sprintf('%s/g_scenario_no_survival_variation_no_apomixis.png',dir_results), 
-       width=12,height=7) 
-
+                 legend='bottom'),      
+       file=sprintf('%s/g_dots_base.png',dir_results), 
+       width=12,height=13) 
 
 
 
 
 # do PDPs
-do_pdp_2d <- function(m_rf, pred_x, pred_y, grid_resolution=5)
-{
-  grid = expand.grid(x=seq(0,1,length.out=grid_resolution),y=seq(0,1,length.out=grid_resolution))
-  names(grid) = c(pred_x, pred_y)
-  
-  pdp_this = partial(m_rf,
-              pred.var=c(pred_x,pred_y),
-              pred.grid=grid,
-              train=df_all %>% filter(dir_out=='all') %>% sample_n(1000),
-              progress = TRUE,
-              plot = FALSE)
-  
-  g_this = ggplot(pdp_this, aes_string(x=pred_x,y=pred_y,fill="yhat")) + 
-    geom_raster() +
-    scale_fill_viridis_c(name='Distance (d)') +
-    theme_bw() +
-    xlab(nice_names[pred_x]) +
-    ylab(nice_names[pred_y])
-  
-  return(g_this)
-}
+# do_pdp_2d <- function(m_rf, pred_x, pred_y, grid_resolution=5)
+# {
+#   grid = expand.grid(x=seq(0,1,length.out=grid_resolution),y=seq(0,1,length.out=grid_resolution))
+#   names(grid) = c(pred_x, pred_y)
+#   
+#   pdp_this = partial(m_rf,
+#               pred.var=c(pred_x,pred_y),
+#               pred.grid=grid,
+#               train=df_all %>% filter(dir_out=='all') %>% sample_n(1000),
+#               progress = TRUE,
+#               plot = FALSE)
+#   
+#   g_this = ggplot(pdp_this, aes_string(x=pred_x,y=pred_y,fill="yhat")) + 
+#     geom_raster() +
+#     scale_fill_viridis_c(name='Distance (d)') +
+#     theme_bw() +
+#     xlab(nice_names[pred_x]) +
+#     ylab(nice_names[pred_y])
+#   
+#   return(g_this)
+# }
 
-do_pdp_1d <- function(m_rf, pred_x, grid_resolution=5)
+do_pdp_1d <- function(scenario_this, pred_x, grid_resolution=5)
 {
   grid = expand.grid(x=seq(0,1,length.out=grid_resolution))
   names(grid) = c(pred_x)
   
-  pdp_this = partial(m_rf,
+  pdp_this = partial(rf_list[[scenario_this]],
                      pred.var=c(pred_x),
                      pred.grid=grid,
-                     train=df_all %>% filter(dir_out=='all') %>% sample_n(1000),
+                     train=df_all %>% 
+                       filter(scenario==scenario_this),
                      progress = TRUE,
                      plot = FALSE)
-  
-  # g_this = ggplot(pdp_this, aes_string(x=pred_x,y="yhat")) + 
-  #   geom_point() +
-  #   geom_line() +
-  #   theme_bw() +
-  #   xlab(nice_names[pred_x]) +
-  #   ylab("Distance (d)")
   
   return(pdp_this)
 }
 
-pdp_gametes_diploid_12 = do_pdp(m_rf = rf_list[["all"]], 
-       pred_x = "prob_gametes_diploid_1", 
-       pred_y = "prob_gametes_diploid_2",
-       grid_resolution=7)
-pdp_gametes_triploid_13 = do_pdp(m_rf = rf_list[["all"]], 
-                             pred_x = "prob_gametes_triploid_1", 
-                             pred_y = "prob_gametes_triploid_3",
-                             grid_resolution=7)
-pdp_gametes_tetraploid_42 = do_pdp(m_rf = rf_list[["all"]], 
-                                 pred_x = "prob_gametes_tetraploid_2", 
-                                 pred_y = "prob_gametes_tetraploid_4",
-                                 grid_resolution=7)
-pdp_gametes_tetraploid_diploid = do_pdp(m_rf = rf_list[["all"]], 
-                                   pred_x = "prob_gametes_tetraploid_2", 
-                                   pred_y = "prob_gametes_diploid_1",
-                                   grid_resolution=7)
+# make PDPs
+make_pdps_1d_for_scenario <- function(scenario_this)
+{
+  pdps_1d = lapply(setdiff(names_predictors,"n_indivs"), do_pdp_1d,
+         scenario_this=scenario_this, 
+         grid_resolution = 20)
+  
+  # plot PDPs
+  pdps_1d_joined = rbindlist(lapply(pdps_1d, function(x) { 
+    df = data.frame(x,var=nice_names[names(x)[1]])
+    names(df) = c("x","yhat","var")
+    return(df) }))
+  pdps_1d_joined = pdps_1d_joined %>%
+    group_by(var) %>%
+    mutate(is.min=factor(yhat==min(yhat))) %>%
+    mutate(group=substr(var,1,1))
+  
+  pdps_1d_list = by(pdps_1d_joined, pdps_1d_joined$group, function(x) {
+    g_pdps_1d_this = ggplot(x, aes(x=x,y=yhat,color=is.min,group=var)) +
+      theme_bw() +
+      geom_point() +
+      geom_line(color='black') +
+      facet_wrap(~var,ncol=4) +
+      scale_color_manual(values=c('black','red')) +
+      theme(legend.position='none') +
+      ylab("Distance (d)") +
+      xlab("Value")
+  })
+  
+  ggsave(ggarrange(plotlist=pdps_1d_list,ncol=1,labels='auto',heights=c(3,1,1,1)),
+         file=sprintf('%s/g_pdps_1d_%s.png',dir_results,scenario_this), 
+         width=8,height=15) 
+}
 
-ggarrange(pdp_gametes_diploid_12, pdp_gametes_triploid_13, pdp_gametes_tetraploid_42, pdp_gametes_tetraploid_diploid,
-          common.legend = TRUE)
-
-
-do_pdp_1d(m_rf = rf_list[["all"]], 
-          pred_x = "prob_gametes_triploid_1",
-          grid_resolution = 10)
-
-
-names_gametes = df_all %>% 
-  select(contains("prob_gametes")) %>% 
-  names
-
-pdps_1d = lapply(names_gametes, do_pdp_1d,
-       m_rf = rf_list[["all"]], 
-       grid_resolution = 20)
-
-pdps_1d_joined = rbindlist(lapply(pdps_1d, function(x) { 
-  df = data.frame(x,var=nice_names[names(x)[1]])
-  names(df) = c("x","yhat","var")
-  return(df) }))
-pdps_1d_joined = pdps_1d_joined %>%
-  group_by(var) %>%
-  mutate(is.min=yhat==min(yhat))
-
-g_pdps_1d = ggplot(pdps_1d_joined, aes(x=x,y=yhat,color=is.min,group=var)) +
-  theme_bw() +
-  geom_point() +
-  geom_line(color='black') +
-  facet_wrap(~var) +
-  scale_color_manual(values=c('black','red')) +
-  theme(legend.position='none') +
-  ylab("Distance (d)") +
-  xlab("Value")
-ggsave(g_pdps_1d,file=sprintf('%s/g_pdps_1d.png',dir_results), 
-       width=8,height=8) 
-
-# full range
-# haven't figured out clear parameters
-
-
-
-# try filtering simulation outputs to only the realistic cases
-# maybe more efficient to pre-set the parameters to this restricted range via sampling
-# data_realistic = df_all %>%
-#           filter(dir_out=='outputs_all_2023-10-09') %>%
-#           filter(in_target==TRUE)
-# 					filter(prob_gametes_haploid_1 < 0.2)
-# 					
-# nrow(data_realistic)/nrow(data)
-# data_realistic$distance
-
-
-
-
-ggplot(df_all %>% filter(dir_out=='outputs_restricted_range_2023-10-09'), aes(x=prob_gametes_diploid_2,y=prob_gametes_tetraploid_3,color=distance)) + geom_point(size=0.5) +
-  scale_color_gradientn(colors=c('purple','red','orange','lightgray'),values=c(0,0.01,0.1,1))
+make_pdps_1d_for_scenario("triploid fertility, apomixis, haploid tetraploid, offspring survival variation, parent survival")
 
