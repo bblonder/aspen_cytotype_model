@@ -417,7 +417,7 @@ rf_list = lapply(X=df_all_split, FUN=function(df_this) {
   return(m_rf)
 })
 names(rf_list) = sapply(df_all_split, function(x) { x$scenario[1] })
-saveRDS(rf_list, file='rf_list.Rdata')
+#saveRDS(rf_list, file='rf_list.Rdata')
 
 # post-hoc explanation of relationship among variables
 df_importance = cbind(scenario=unique(df_all$scenario), do.call("rbind",lapply(rf_list, function(x) { data.frame(t(importance(x))) }))) %>%
