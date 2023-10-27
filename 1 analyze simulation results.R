@@ -153,14 +153,6 @@ ordering_counts = df_counts %>%
 df_counts = df_counts %>%
   mutate(scenario=factor(scenario,levels=ordering_counts,ordered=TRUE))
 
-# g_in_target = ggplot(df_counts,aes(x=scenario,y=frac)) +
-#   geom_bar(stat='identity',position='dodge') +
-#   #facet_wrap(~dir_out) + 
-#   theme_bw() +
-#   coord_flip()# +
-#   #theme(legend.position='none')
-# ggsave(g_in_target, file=sprintf('%s/g_in_target.pdf',dir_results),width=8,height=6)
-# 
 
 g_in_target = df_counts %>%
   select(scenario, frac, frac.per.var) %>%
@@ -176,6 +168,10 @@ g_in_target = df_counts %>%
   theme(legend.position='bottom')
 ggsave(g_in_target, file=sprintf('%s/g_in_target.pdf',dir_results),width=10,height=6)
 ggsave(g_in_target, file=sprintf('%s/g_in_target.png',dir_results),width=10,height=6)
+
+
+# summarize results
+df_counts %>% summary
 
 
 #show mean_n
@@ -246,13 +242,29 @@ ggsave(g_density_new, file=sprintf('%s/g_density_new.pdf',dir_results),width=30,
 ggsave(g_density_new, file=sprintf('%s/g_density_new.png',dir_results),width=30,height=40)
 
 
+g_density_all = ggplot(df_longer %>% 
+                         filter(scenario=="triploid fertility, apomixis, haploid tetraploid, offspring survival variation, parent survival") %>%
+                         mutate(nice_name=nice_names[name]), 
+                       aes(x=nice_name, y=value,color=in_target,fill=in_target)) +
+  geom_violin(draw_quantiles=c(0.5),alpha=0.5) + 
+  facet_wrap(~nice_name,scales='free') +
+  coord_flip() +
+  theme_bw() +
+  xlab('Scenario') + ylab('Value') +
+  scale_color_manual(values=c('gray','blue'),name='In-target') + 
+  scale_fill_manual(values=c('gray','blue'),name='In-target') +
+  theme(axis.title.y=element_blank(),axis.text.y=element_blank()) +
+  ggtitle("triploid fertility, apomixis, haploid tetraploid, offspring survival variation, parent survival")
+ggsave(g_density_all, file=sprintf('%s/g_density_all.pdf',dir_results),width=9,height=8)
+ggsave(g_density_all, file=sprintf('%s/g_density_all.png',dir_results),width=9,height=8)
+
 
 # find cases to plot
 id_example = df_all %>% 
   mutate(row_id=1:n()) %>%
   filter(dir_out=="output,triploid_fertility=1,apomixis=1,haploid_tetraploid=1,offspring_survival_variation=1,parent_survival=1") %>%
-  filter(distance<0.02)
-print(id_example[19,] %>% select(id, row_id))
+  filter(n_indivs > 800 & distance<0.05 & prob_gametes_2_1 > 0.5)
+print(id_example[1,] %>% select(id, row_id))
 
 plot_ts <- function(fn_ts)
 {
@@ -283,7 +295,7 @@ plot_ts <- function(fn_ts)
   
   return(g)
 }
-g_ts_in_target = plot_ts('output,triploid_fertility=1,apomixis=1,haploid_tetraploid=1,offspring_survival_variation=1,parent_survival=1/ts_3738.csv')
+g_ts_in_target = plot_ts(sprintf('output,triploid_fertility=1,apomixis=1,haploid_tetraploid=1,offspring_survival_variation=1,parent_survival=1/ts_%d.csv',id_example$id[1]))
 
 # plot parameters
 plot_matrix <- function(m, subtract_one=FALSE)
@@ -364,7 +376,7 @@ plot_params <- function(row_id_this, df_this)
   return(g_final)
 }
 
-params_in_target = plot_params(158738,df_all)
+params_in_target = plot_params(id_example$row_id[1],df_all)
 
 g_ts_example = ggarrange(params_in_target, g_ts_in_target,
                          labels=c("(a)","(b)"),
@@ -405,6 +417,7 @@ rf_list = lapply(X=df_all_split, FUN=function(df_this) {
   return(m_rf)
 })
 names(rf_list) = sapply(df_all_split, function(x) { x$scenario[1] })
+saveRDS(rf_list, file='rf_list.Rdata')
 
 # post-hoc explanation of relationship among variables
 df_importance = cbind(scenario=unique(df_all$scenario), do.call("rbind",lapply(rf_list, function(x) { data.frame(t(importance(x))) }))) %>%
@@ -437,9 +450,10 @@ g_rf_importance_all = ggplot(df_importance %>%
   scale_x_discrete(limits = rev(sort(unique(df_importance$nice_name)))) +
   ylab('Importance (Gini impurity)') +
   xlab('Parameter') +
-  theme(legend.position='none')
-ggsave(g_rf_importance_all, file=sprintf('%s/g_rf_importance_all.pdf',dir_results),width=7,height=7)
-ggsave(g_rf_importance_all, file=sprintf('%s/g_rf_importance_all.png',dir_results),width=7,height=7)
+  theme(legend.position='none') + 
+  ggtitle("triploid fertility, apomixis, haploid tetraploid, offspring survival variation, parent survival")
+ggsave(g_rf_importance_all, file=sprintf('%s/g_rf_importance_all.pdf',dir_results),width=9,height=7)
+ggsave(g_rf_importance_all, file=sprintf('%s/g_rf_importance_all.png',dir_results),width=9,height=7)
 
 
 
@@ -458,6 +472,8 @@ g_rf_r2 = ggplot(rf_r2, aes(x=scenario,y=r.squared)) +
 ggsave(g_rf_r2, file=sprintf('%s/g_rf_r2.pdf',dir_results),width=9,height=7)
 ggsave(g_rf_r2, file=sprintf('%s/g_rf_r2.png',dir_results),width=9,height=7)
 
+rf_r2$r.squared %>% summary
+
 # plot params
 
 make_dot_plot <- function(scenario_this="triploid fertility, apomixis, haploid tetraploid, offspring survival variation, parent survival",
@@ -470,6 +486,7 @@ make_dot_plot <- function(scenario_this="triploid fertility, apomixis, haploid t
                           ylab_this)
 {
   df_this = df_all %>%
+    mutate(fecundity_4 = prob_gametes_4_1 + prob_gametes_4_2 + prob_gametes_4_3 + prob_gametes_4_4) %>%
     mutate(fecundity_3 = prob_gametes_3_1 + prob_gametes_3_2 + prob_gametes_3_3) %>%
     mutate(fecundity_2 = prob_gametes_2_1 + prob_gametes_2_2) %>%
     filter(scenario==scenario_this)
@@ -569,15 +586,7 @@ g_dots_base_2 = make_dot_plot(scenario_this="triploid fertility",
                               xlab_this="Triploid fecundity, (A31 + A32 + A33)",
                               ylab_this="Diploid fecundity, (A21 + A22)")
 
-g_dots_base_3 = make_dot_plot(scenario_this="parent survival",
-                              include_title = TRUE,
-                              xvar="prob_survival_parent_3",
-                              yvar="prob_gametes_2_1",
-                              include_log_limits = FALSE,
-                              xlab_this="D3",
-                              ylab_this="A21")
-
-g_dots_base_4 = make_dot_plot(scenario_this="haploid tetraploid",
+g_dots_base_3 = make_dot_plot(scenario_this="haploid tetraploid",
                               include_title = TRUE,
                               xvar="prob_gametes_4_2",
                               yvar="prob_gametes_2_2",
@@ -585,13 +594,21 @@ g_dots_base_4 = make_dot_plot(scenario_this="haploid tetraploid",
                               xlab_this="A42",
                               ylab_this="A22")
 
+g_dots_base_4 = make_dot_plot(scenario_this="apomixis",
+                              include_title = TRUE,
+                              xvar="prob_apomixis_3/prob_apomixis_2",
+                              yvar="prob_gametes_2_2/prob_gametes_2_1",
+                              include_log_limits = TRUE,
+                              xlab_this="B3/B2",
+                              ylab_this="A22/A21")
+
 ggsave(ggarrange(g_dots_base_1, g_dots_base_2, g_dots_base_3, g_dots_base_4,
           align='hv',
           common.legend = TRUE,
           labels='auto',
           legend='bottom'),      
-file=sprintf('%s/g_dots_base.pdf',dir_results), 
-width=12,height=13) 
+      file=sprintf('%s/g_dots_base.pdf',dir_results), 
+      width=12,height=13) 
 ggsave(ggarrange(g_dots_base_1, g_dots_base_2, g_dots_base_3, g_dots_base_4,
                  align='hv',
                  common.legend = TRUE,
@@ -635,7 +652,8 @@ do_pdp_1d <- function(scenario_this, pred_x, grid_resolution=5)
                      pred.var=c(pred_x),
                      pred.grid=grid,
                      train=df_all %>% 
-                       filter(scenario==scenario_this),
+                       filter(scenario==scenario_this) %>%
+                       sample_n(1000), # for speed
                      progress = TRUE,
                      plot = FALSE)
   

@@ -91,7 +91,7 @@ sample_params <- function(num_samples,
     
     n_iterations = NUM_ITERATIONS,
     n_points_to_average = 20,
-    save_plot=TRUE,
+    save_plot=FALSE,
     save_time_series=TRUE,
     progress=FALSE
     
